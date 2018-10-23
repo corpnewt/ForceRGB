@@ -75,7 +75,7 @@ class RGB:
                     print(" - Backing up with timestamp...")
                     self.r.run({"args":["mv",os.path.join(self.dest,d),os.path.join(self.dest,d+self._get_timestamp())],"sudo":True})
                 print(" - Copying...")
-                self.r.run({"args":["copy","-r",os.path.join(s_path,d),os.path.join(self.dest,d)],"sudo":True})
+                self.r.run({"args":["cp","-r",os.path.join(s_path,d),os.path.join(self.dest,d)],"sudo":True})
                 print(" - Removing original...")
                 self.r.run({"args":["rm","-Rf",os.path.join(s_path,d)],"sudo":True})
         print("")
