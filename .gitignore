@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Ignore .rb scripts and our override folders
+*.rb
+DisplayVendorID*
+
 # C extensions
 *.so
 
