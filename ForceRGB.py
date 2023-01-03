@@ -33,7 +33,7 @@ class RGB:
 
     def _check_out(self, out, prefix=" - "):
         if out[2] != 0:
-            print("{}Failed: {}".format(out[1]))
+            print("{}Failed: {}".format(prefix,out[1]))
             exit(1)
 
     def main(self):
