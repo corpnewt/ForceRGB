@@ -7,7 +7,7 @@ class RGB:
         self.u = utils.Utils("ForceRGB")
         self.d = downloader.Downloader()
         self.r = run.Run()
-        self.url = "https://gist.githubusercontent.com/adaugherity/7435890/raw/66c54c17b179809b028b58a2ca7af0b9540d05b6/patch-edid.rb"
+        self.url = "https://gist.githubusercontent.com/adaugherity/7435890/raw/3403436446665aec2b5cf423ea4a5af63125e5af/patch-edid.rb"
         self.scripts = "Scripts"
         if self.r.run({"args":["sw_vers","-productVersion"]})[0].strip() < "10.15":
             self.dest = "/System/Library/Displays/Contents/Resources/Overrides"
