@@ -14,6 +14,36 @@ class RGB:
         else:
             self.dest = "/Library/Displays/Contents/Resources/Overrides"
 
+    def _get_latest_url(self):
+        # Queries https://gist.github.com/adaugherity/7435890 directly and parses for
+        # the latest revision
+        print("Locating the latest revision of the patch edid script...")
+        source_url = "https://gist.github.com/adaugherity/7435890"
+        latest_url = revision = None
+        try:
+            source_html = self.d.get_string(source_url,progress=False)
+            revision_primed = False
+            for line in source_html.split("\n"):
+                if '<a href="/adaugherity/7435890/raw/' in line:
+                    latest_url = "https://gist.githubusercontent.com{}".format(line.split('"')[1].split('"')[0])
+                elif line.strip() == "Revisions":
+                    revision_primed = True
+                elif revision_primed and 'class="Counter">' in line:
+                    revision = line.split('class="Counter">')[1].split("<")[0]
+                    revision_primed = False
+                if latest_url and revision:
+                    break # Got what we needed, bail
+        except:
+            pass
+        if latest_url:
+            print(" - Located {}{}".format(
+                os.path.basename(latest_url),
+                "" if not revision else " revision {}".format(revision)
+            ))
+            return latest_url
+        print(" - Not located, using the last known revision...")
+        return self.url
+
     def _get_timestamp(self):
         return "-{:%Y-%m-%d %H.%M.%S}".format(datetime.datetime.now())
 
@@ -26,7 +56,8 @@ class RGB:
         s_name = os.path.basename(self.url)
         if not os.path.exists(os.path.join(s_path,s_name)):
             # Try to download
-            self._download(self.url, s_path)
+            latest_url = self._get_latest_url()
+            self._download(latest_url, s_path)
         if os.path.exists(os.path.join(s_path,s_name)):
             return os.path.join(s_path,s_name)
         return None
