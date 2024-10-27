@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-import os, sys, datetime, shutil
-from Scripts import *
+import os, datetime, shutil, argparse
+from Scripts import utils, run, downloader, plist
 
 class RGB:
     def __init__(self):
@@ -36,7 +36,7 @@ class RGB:
             print("{}Failed: {}".format(prefix,out[1]))
             exit(1)
 
-    def main(self):
+    def main(self, display_is_tv="prompt"):
         s_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), self.scripts)
         self.u.head()
         print("")
@@ -75,6 +75,34 @@ class RGB:
             # Errored out
             print("Script returned an error.  Aborting...")
             exit(1)
+        # Check if we want to force the DisplayIsTV property
+        if display_is_tv == "prompt":
+            print("The DisplayIsTV property can be forced to False in order to use night shift")
+            print("even if the display is a TV.")
+            print("")
+            print("1. Omit DisplayIsTV and let the OS detect the display type")
+            print("2. Force DisplayIsTV to True")
+            print("3. Force DisplayIsTV to False")
+            print("")
+            print("Q. Quit")
+            print("")
+            while True:
+                got = self.u.grab("Please select an option:  ")
+                if not len(got):
+                    continue
+                got = got.lower()
+                if got == "q":
+                    self.u.custom_quit()
+                if not got in ("1","2","3"):
+                    continue
+                if got == "1":
+                    display_is_tv = None
+                if got == "2":
+                    display_is_tv = True
+                else:
+                    display_is_tv = False
+                break
+            print("")
         # We'll need to copy the directory - gather it up
         print("Scanning and copying results...")
         print(" - Verifying {}...".format(self.dest))
@@ -83,8 +111,31 @@ class RGB:
             out = self.r.run({"args":["mkdir","-p",self.dest],"sudo":True})
             self._check_out(out,prefix=" --> ")
         for d in os.listdir(s_path):
-            if d.lower().startswith("displayvendorid"):
+            if os.path.isdir(os.path.join(d,s_path)) and d.lower().startswith("displayvendorid"):
                 print("Located {}.".format(d))
+                if display_is_tv is not None:
+                    print(" - Setting DisplayIsTV to {}...".format(display_is_tv))
+                    target = next((x for x in os.listdir(os.path.join(s_path,d)) if x.lower().startswith("displayproductid-")),None)
+                    if not target:
+                        print(" -> DisplayProductdID-X not found.  Aborting...")
+                        exit(1)
+                    target = os.path.join(s_path,d,target)
+                    if not os.path.isfile(target):
+                        print(" -> {} not found.  Aborting...".format(os.path.basename(target)))
+                    try:
+                        with open(target,"rb") as f:
+                            p_data = plist.load(f)
+                    except Exception:
+                        print(" -> Failed to open {}.  Aborting...".format(os.path.basename(target)))
+                        exit(1)
+                    # Set the prop and write the file
+                    p_data["DisplayIsTV"] = display_is_tv
+                    try:
+                        with open(target,"wb") as f:
+                            plist.dump(p_data,f)
+                    except Exception:
+                        print(" -> Failed to save {}.  Aborting...".format(os.path.basename(target)))
+                        exit(1)
                 if os.path.exists(os.path.join(self.dest, d)):
                     print(" - Already exists at destination.")
                     print(" - Backing up with timestamp...")
@@ -92,13 +143,37 @@ class RGB:
                 print(" - Copying...")
                 out = self.r.run({"args":["cp","-r",os.path.join(s_path,d),os.path.join(self.dest,d)],"sudo":True})
                 self._check_out(out,prefix=" --> ")
-                print(" - Removing original...")
-                out = self.r.run({"args":["rm","-Rf",os.path.join(s_path,d)],"sudo":True})
-                self._check_out(out,prefix=" --> ")
         print("")
         print("Done.")
         print("")
-        exit()
+        self.u.custom_quit()
 
-r = RGB()
-r.main()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-d",
+        "--display-is-tv",
+        help=(
+            "optionally sets the explicit value for the DisplayIsTV property"
+            " - accepts prompt, none, true, or false - default is prompt"
+        )
+    )
+    args = parser.parse_args()
+    display_is_tv = "prompt"
+    if args.display_is_tv:
+        # Make sure it's valid
+        tv_check = args.display_is_tv.lower()
+        if tv_check in ("y","1","on","yes","true"):
+            display_is_tv = True
+        elif tv_check in ("n","0","no","off","false"):
+            display_is_tv = False
+        elif tv_check in ("none","null","omit"):
+            display_is_tv = None
+        elif tv_check in ("p","prompt","ask"):
+            pass # Leave it as "prompt"
+        else:
+            # Didn't get a valid value - throw an error
+            print("Invalid value for --display-is-tv:\n  Only prompt, none, true, or false can be passed.")
+            exit(1)
+    r = RGB()
+    r.main(display_is_tv=display_is_tv)
