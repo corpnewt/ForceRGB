@@ -9,8 +9,6 @@ data = `ioreg -l -w0`
 
 # Extract EDID data for external displays
 edid_matches = data.scan(/"EDID" = <([a-f0-9]+)>/i)
-product_matches = data.scan(/"ProductID"=(\d+)/)
-vendor_matches = data.scan(/"LegacyManufacturerID"=(\d+)/)
 name_matches = data.scan(/"ProductName"="([^"]+)"/)
 
 displays = []
@@ -19,23 +17,40 @@ edid_matches.each_with_index do |edid_match, i|
     # Skip if this looks like built-in display EDID (typically much shorter)
     next if edid_hex.length < 200
     
-    # Try to find corresponding product info
-    if i < product_matches.length && i < vendor_matches.length && i < name_matches.length
-        product_id = product_matches[i][0].to_i
-        vendor_id = vendor_matches[i][0].to_i
-        display_name = name_matches[i][0]
-        
-        # Skip built-in displays (Apple vendor ID is 0x106b = 4203)
-        next if vendor_id == 4203
-        
-        disp = {
-            "edid_hex" => edid_hex,
-            "vendorid" => vendor_id,
-            "productid" => product_id,
-            "name" => display_name
-        }
-        displays.push(disp)
+    # Extract vendor and product IDs directly from EDID data
+    bytes = edid_hex.scan(/../).map{|x| Integer("0x#{x}")}.flatten
+    
+    # Vendor ID is at bytes 8-9 (big endian)
+    vendor_id = (bytes[8] << 8) | bytes[9]
+    
+    # Product ID is at bytes 10-11 (little endian)
+    product_id = (bytes[11] << 8) | bytes[10]
+    
+    # Skip built-in displays (Apple vendor ID is 0x106b = 4203)
+    next if vendor_id == 4203
+    
+    # Get display name if available
+    display_name = (i < name_matches.length) ? name_matches[i][0] : "External Display"
+    next if display_name.include?("Color LCD") || display_name.include?("Built-in")
+    
+    # Retrieve monitor model from EDID display descriptor
+    edid_name_index = edid_hex.index('000000fc00')
+    if edid_name_index.nil?
+        monitor_name = display_name
+    else
+        # The monitor name is stored in (up to) 13 bytes of text following 00 00 00 fc 00.
+        monitor_name = [edid_hex[edid_name_index + 10, 26].to_s].pack("H*")
+        monitor_name.rstrip!            # remove trailing newline/spaces
+        monitor_name = display_name if monitor_name.empty?
     end
+    
+    disp = {
+        "edid_hex" => edid_hex,
+        "vendorid" => vendor_id,
+        "productid" => product_id,
+        "name" => monitor_name
+    }
+    displays.push(disp)
 end
 
 # Process all displays
