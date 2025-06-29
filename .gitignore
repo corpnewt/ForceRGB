@@ -3,8 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Ignore .rb scripts and our override folders
+# Ignore .rb scripts and our override folders (except our custom Apple Silicon script)
 *.rb
+!Scripts/patch-edid-m1.rb
 DisplayVendorID*
 
 # C extensions
