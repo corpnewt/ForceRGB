@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import os, datetime, shutil, argparse
+import os, datetime, shutil, argparse, platform, subprocess
 from Scripts import utils, run, downloader, plist
 
 class RGB:
@@ -13,6 +13,44 @@ class RGB:
             self.dest = "/System/Library/Displays/Contents/Resources/Overrides"
         else:
             self.dest = "/Library/Displays/Contents/Resources/Overrides"
+
+    def _is_apple_silicon(self):
+        """Detect if running on Apple Silicon (M1/M2/M3) or Intel"""
+        try:
+            # Method 1: Check uname -m
+            result = subprocess.run(['uname', '-m'], capture_output=True, text=True)
+            if result.returncode == 0:
+                arch = result.stdout.strip()
+                if arch == 'arm64':
+                    return True
+                elif arch == 'x86_64':
+                    return False
+            
+            # Method 2: Check platform.machine() as fallback
+            machine = platform.machine()
+            if machine == 'arm64':
+                return True
+            elif machine in ['x86_64', 'AMD64']:
+                return False
+                
+            # Method 3: Check sysctl as final fallback
+            result = subprocess.run(['sysctl', '-n', 'hw.optional.arm64'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip() == '1':
+                return True
+                
+        except Exception:
+            pass
+        
+        # Default to Intel if detection fails
+        return False
+
+    def _get_script_name(self):
+        """Get the appropriate script name based on CPU architecture"""
+        if self._is_apple_silicon():
+            return "patch-edid-m1.rb"
+        else:
+            return "patch-edid.rb"
 
     def _get_latest_url(self):
         # Queries https://gist.github.com/adaugherity/7435890 directly and parses for
@@ -53,14 +91,33 @@ class RGB:
 
     def _check_script(self):
         s_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), self.scripts)
-        s_name = os.path.basename(self.url)
-        if not os.path.exists(os.path.join(s_path,s_name)):
-            # Try to download
-            latest_url = self._get_latest_url()
-            self._download(latest_url, s_path)
-        if os.path.exists(os.path.join(s_path,s_name)):
-            return os.path.join(s_path,s_name)
-        return None
+        
+        # Determine which script to use based on architecture
+        is_arm = self._is_apple_silicon()
+        script_name = self._get_script_name()
+        
+        if is_arm:
+            # For Apple Silicon, check if our custom script exists
+            arm_script_path = os.path.join(s_path, script_name)
+            if os.path.exists(arm_script_path):
+                print(f"Using Apple Silicon compatible script: {script_name}")
+                return arm_script_path
+            else:
+                print(f"Apple Silicon detected but {script_name} not found!")
+                print("The custom Apple Silicon script should be included in the Scripts directory.")
+                return None
+        else:
+            # For Intel, download the original script if needed
+            s_name = os.path.basename(self.url)
+            intel_script_path = os.path.join(s_path, s_name)
+            if not os.path.exists(intel_script_path):
+                # Try to download
+                latest_url = self._get_latest_url()
+                self._download(latest_url, s_path)
+            if os.path.exists(intel_script_path):
+                print(f"Using Intel compatible script: {s_name}")
+                return intel_script_path
+            return None
 
     def _check_out(self, out, prefix=" - "):
         if out[2] != 0:
@@ -71,20 +128,28 @@ class RGB:
         s_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), self.scripts)
         self.u.head()
         print("")
+        
+        # Detect and display architecture
+        is_arm = self._is_apple_silicon()
+        arch_name = "Apple Silicon (ARM64)" if is_arm else "Intel (x86_64)"
+        print(f"Detected CPU Architecture: {arch_name}")
+        print("")
+        
         print("Gathering resources...")
         s = self._check_script()
         if not s:
             print("Script missing and failed to download.  Aborting...")
             exit(1)
+            
+        # Modified cleanup - preserve DisplayVendorID directories temporarily
         print("Cleaning Scripts folder...")
+        preserved_dirs = []
         for d in os.listdir(s_path):
             if d.lower().startswith("displayvendorid"):
-                print(" - Removing {}...".format(d))
-                try:
-                    shutil.rmtree(os.path.join(s_path, d),ignore_errors=True)
-                except Exception as e:
-                    print(" ---> Failed: {}".format(e))
-                    exit(1)
+                # Instead of removing, just note them for later cleanup
+                preserved_dirs.append(d)
+                print(" - Found existing {}... (will clean after processing)".format(d))
+                
         print("Running {}...".format(os.path.basename(s)))
         # Uses ruby - set our Scripts dir as the default
         cwd = os.getcwd()
@@ -95,7 +160,7 @@ class RGB:
         print("-------------------- Running Patch --------------------")
         print("-------------------------------------------------------")
         print("")
-        out = self.r.run({"args":["ruby",s],"stream":True})
+        out = self.r.run({"args":["ruby", os.path.basename(s)],"stream":True})
         self._check_out(out)
         print("")
         print("-------------------------------------------------------")
@@ -106,6 +171,7 @@ class RGB:
             # Errored out
             print("Script returned an error.  Aborting...")
             exit(1)
+            
         # Check if we want to force the DisplayIsTV property
         if display_is_tv == "prompt":
             print("The DisplayIsTV property can be forced to False in order to use night shift")
@@ -128,12 +194,13 @@ class RGB:
                     continue
                 if got == "1":
                     display_is_tv = None
-                if got == "2":
+                elif got == "2":
                     display_is_tv = True
                 else:
                     display_is_tv = False
                 break
             print("")
+            
         # We'll need to copy the directory - gather it up
         print("Scanning and copying results...")
         print(" - Verifying {}...".format(self.dest))
@@ -141,39 +208,62 @@ class RGB:
             print(" --> Does not exist, attempting to create...")
             out = self.r.run({"args":["mkdir","-p",self.dest],"sudo":True})
             self._check_out(out,prefix=" --> ")
-        for d in os.listdir(s_path):
-            if os.path.isdir(os.path.join(d,s_path)) and d.lower().startswith("displayvendorid"):
-                print("Located {}.".format(d))
-                if display_is_tv is not None:
-                    print(" - Setting DisplayIsTV to {}...".format(display_is_tv))
-                    target = next((x for x in os.listdir(os.path.join(s_path,d)) if x.lower().startswith("displayproductid-")),None)
-                    if not target:
-                        print(" -> DisplayProductdID-X not found.  Aborting...")
-                        exit(1)
-                    target = os.path.join(s_path,d,target)
-                    if not os.path.isfile(target):
-                        print(" -> {} not found.  Aborting...".format(os.path.basename(target)))
-                    try:
-                        with open(target,"rb") as f:
-                            p_data = plist.load(f)
-                    except Exception:
-                        print(" -> Failed to open {}.  Aborting...".format(os.path.basename(target)))
-                        exit(1)
-                    # Set the prop and write the file
-                    p_data["DisplayIsTV"] = display_is_tv
-                    try:
-                        with open(target,"wb") as f:
-                            plist.dump(p_data,f)
-                    except Exception:
-                        print(" -> Failed to save {}.  Aborting...".format(os.path.basename(target)))
-                        exit(1)
-                if os.path.exists(os.path.join(self.dest, d)):
-                    print(" - Already exists at destination.")
-                    print(" - Backing up with timestamp...")
-                    self.r.run({"args":["mv",os.path.join(self.dest,d),os.path.join(self.dest,d+self._get_timestamp())],"sudo":True})
-                print(" - Copying...")
-                out = self.r.run({"args":["cp","-r",os.path.join(s_path,d),os.path.join(self.dest,d)],"sudo":True})
-                self._check_out(out,prefix=" --> ")
+            
+        # Find newly created DisplayVendorID directories
+        current_dirs = [d for d in os.listdir(s_path) 
+                       if os.path.isdir(os.path.join(s_path, d)) and d.lower().startswith("displayvendorid")]
+        
+        if not current_dirs:
+            print("No DisplayVendorID directories found. The script may not have detected any external displays.")
+            print("This is normal on Apple Silicon if no compatible external displays are connected.")
+            
+        for d in current_dirs:
+            print("Located {}.".format(d))
+            if display_is_tv is not None:
+                print(" - Setting DisplayIsTV to {}...".format(display_is_tv))
+                target = next((x for x in os.listdir(os.path.join(s_path,d)) if x.lower().startswith("displayproductid-")),None)
+                if not target:
+                    print(" -> DisplayProductID-X not found.  Aborting...")
+                    exit(1)
+                target = os.path.join(s_path,d,target)
+                if not os.path.isfile(target):
+                    print(" -> {} not found.  Aborting...".format(os.path.basename(target)))
+                    exit(1)
+                try:
+                    with open(target,"rb") as f:
+                        p_data = plist.load(f)
+                except Exception:
+                    print(" -> Failed to open {}.  Aborting...".format(os.path.basename(target)))
+                    exit(1)
+                # Set the prop and write the file
+                p_data["DisplayIsTV"] = display_is_tv
+                try:
+                    with open(target,"wb") as f:
+                        plist.dump(p_data,f)
+                except Exception:
+                    print(" -> Failed to save {}.  Aborting...".format(os.path.basename(target)))
+                    exit(1)
+            if os.path.exists(os.path.join(self.dest, d)):
+                print(" - Already exists at destination.")
+                print(" - Backing up with timestamp...")
+                self.r.run({"args":["mv",os.path.join(self.dest,d),os.path.join(self.dest,d+self._get_timestamp())],"sudo":True})
+            print(" - Copying...")
+            out = self.r.run({"args":["cp","-r",os.path.join(s_path,d),os.path.join(self.dest,d)],"sudo":True})
+            self._check_out(out,prefix=" --> ")
+            
+        # Clean up old and newly created DisplayVendorID directories after successful installation
+        print("")
+        print("Cleaning up DisplayVendorID directories...")
+        all_vendor_dirs = preserved_dirs + [d for d in current_dirs if d not in preserved_dirs]
+        for d in all_vendor_dirs:
+            vendor_path = os.path.join(s_path, d)
+            if os.path.exists(vendor_path):
+                print(" - Removing {}...".format(d))
+                try:
+                    shutil.rmtree(vendor_path, ignore_errors=True)
+                except Exception as e:
+                    print(" ---> Warning: Failed to remove {}: {}".format(d, e))
+                    
         print("")
         print("Done.")
         print("")
